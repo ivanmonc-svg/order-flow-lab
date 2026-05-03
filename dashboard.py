@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 from datetime import date
 from pathlib import Path
 
@@ -27,6 +28,7 @@ pn.extension("tabulator", sizing_mode="stretch_width")
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(name)s %(levelname)s %(message)s",
+    stream=sys.stdout,  # Force stdout so Railway captures logs
 )
 logger = logging.getLogger(__name__)
 
@@ -52,11 +54,20 @@ vol_ratio_slider = pn.widgets.FloatSlider(
 start_hour_slider = pn.widgets.IntSlider(
     name="Start Hour (UTC)", start=0, end=23, step=1, value=14,
 )
+start_minute_slider = pn.widgets.IntSlider(
+    name="Start Minute", start=0, end=45, step=15, value=0,
+)
 end_hour_slider = pn.widgets.IntSlider(
-    name="End Hour (UTC)", start=1, end=24, step=1, value=15,
+    name="End Hour (UTC)", start=0, end=24, step=1, value=14,
+)
+end_minute_slider = pn.widgets.IntSlider(
+    name="End Minute", start=0, end=45, step=15, value=15,
+)
+book_depth_select = pn.widgets.Select(
+    name="Book Depth", options={"BBO (fast)": 1, "Top-10 (heavy)": 10}, value=1,
 )
 snapshot_freq_slider = pn.widgets.IntSlider(
-    name="Book Snapshot (ms)", start=50, end=1000, step=50, value=100,
+    name="Book Snapshot (ms)", start=50, end=1000, step=50, value=250,
 )
 load_button = pn.widgets.Button(name="Load & Analyze", button_type="primary")
 
@@ -118,21 +129,37 @@ def on_load(event):
     sym = symbol_select.value
     dt = date_picker.value
     sh = start_hour_slider.value
+    sm = start_minute_slider.value
     eh = end_hour_slider.value
+    em = end_minute_slider.value
+    depth = book_depth_select.value
+
+    # Build ISO timestamps with minute precision
+    start_ts = f"{dt.isoformat()}T{sh:02d}:{sm:02d}:00+00:00"
+    end_ts = f"{dt.isoformat()}T{eh:02d}:{em:02d}:00+00:00"
+    time_label = f"{sh:02d}:{sm:02d}–{eh:02d}:{em:02d} UTC"
 
     try:
         # ── 1. Load raw data ──────────────────────────────────────
-        status_pane.object = f"**Status:** Loading {sym} data for {dt} ({sh}:00–{eh}:00 UTC)..."
+        status_pane.object = f"**Status:** Loading {sym} data for {dt} ({time_label})..."
+        logger.info("Starting load: %s %s %s depth=%d", sym, dt, time_label, depth)
+        sys.stdout.flush()
         loader = DataLoader(data_dir="./data")
 
         status_pane.object = "**Status:** Downloading OHLCV bars..."
-        bars_raw = loader.get_ohlcv(sym, dt, interval="1m", start_hour=sh, end_hour=eh)
+        bars_raw = loader.get_ohlcv_ts(sym, start_ts, end_ts, interval="1m")
+        logger.info("OHLCV loaded: %d rows", len(bars_raw))
+        sys.stdout.flush()
 
         status_pane.object = "**Status:** Loading trades..."
-        trades = loader.get_trades(sym, dt, start_hour=sh, end_hour=eh)
+        trades = loader.get_trades_ts(sym, start_ts, end_ts)
+        logger.info("Trades loaded: %d rows", len(trades))
+        sys.stdout.flush()
 
-        status_pane.object = "**Status:** Loading MBP-10 book data..."
-        mbp = loader.get_mbp(sym, dt, depth=10, start_hour=sh, end_hour=eh)
+        status_pane.object = f"**Status:** Loading MBP-{depth} book data..."
+        mbp = loader.get_mbp_ts(sym, start_ts, end_ts, depth=depth)
+        logger.info("MBP-%d loaded: %d rows", depth, len(mbp))
+        sys.stdout.flush()
 
         # ── 2. Trade features ─────────────────────────────────────
         status_pane.object = "**Status:** Classifying trades (buy/sell)..."
@@ -220,6 +247,7 @@ def on_load(event):
     except Exception as e:
         status_pane.object = f"**Error:** {e}"
         logger.exception("Dashboard error")
+        sys.stdout.flush()
 
 
 load_button.on_click(on_load)
@@ -235,8 +263,13 @@ sidebar = pn.Column(
     symbol_select,
     date_picker,
     start_hour_slider,
+    start_minute_slider,
     end_hour_slider,
-    pn.pane.Markdown("*RTH ≈ 13:30–20:00 UTC*", styles={"color": "#888", "font-size": "11px"}),
+    end_minute_slider,
+    pn.pane.Markdown(
+        "*Default: 15 min window. RTH ≈ 13:30–20:00 UTC*",
+        styles={"color": "#888", "font-size": "11px"},
+    ),
     pn.layout.Divider(),
     "### Strategy",
     lookback_slider,
@@ -244,6 +277,7 @@ sidebar = pn.Column(
     vol_ratio_slider,
     pn.layout.Divider(),
     "### Book",
+    book_depth_select,
     snapshot_freq_slider,
     pn.layout.Divider(),
     load_button,

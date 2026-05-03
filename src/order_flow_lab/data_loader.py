@@ -122,6 +122,75 @@ class DataLoader:
         logger.info("Cached %d rows → %s", len(df), cache)
         return df
 
+    # ── Timestamp-based download (minute precision) ────────────────────
+
+    def _download_ts(
+        self,
+        symbol: str,
+        start_ts: str,
+        end_ts: str,
+        schema: str,
+        stype_in: str = "continuous",
+    ) -> pl.DataFrame:
+        """Download data using exact ISO timestamps (minute precision).
+
+        Args:
+            start_ts: ISO 8601 start time, e.g. "2026-04-28T14:00:00+00:00".
+            end_ts:   ISO 8601 end time,   e.g. "2026-04-28T14:15:00+00:00".
+        """
+        # Sanitize timestamps for cache filename
+        safe_start = start_ts.replace(":", "").replace("+", "p")[:19]
+        safe_end = end_ts.replace(":", "").replace("+", "p")[:19]
+        cache = self.data_dir / f"{symbol}_{safe_start}_{safe_end}_{schema}.parquet"
+
+        if cache.exists():
+            logger.info("Cache hit: %s", cache)
+            return pl.read_parquet(cache)
+
+        logger.info(
+            "Downloading %s %s [%s → %s] from Databento...",
+            symbol, schema, start_ts, end_ts,
+        )
+        raw_sym = SYMBOLS.get(symbol, symbol)
+
+        data = self.client.timeseries.get_range(
+            dataset=DATASET,
+            symbols=[raw_sym],
+            schema=schema,
+            stype_in=stype_in,
+            start=start_ts,
+            end=end_ts,
+        )
+
+        # Convert DBN to DataFrame via to_df() then to polars
+        pdf = data.to_df()
+        df = pl.from_pandas(pdf.reset_index())
+
+        # Write cache
+        df.write_parquet(cache)
+        logger.info("Cached %d rows → %s", len(df), cache)
+        return df
+
+    def get_trades_ts(
+        self, symbol: str, start_ts: str, end_ts: str,
+    ) -> pl.DataFrame:
+        """Get trades using exact ISO timestamps."""
+        return self._download_ts(symbol, start_ts, end_ts, "trades")
+
+    def get_mbp_ts(
+        self, symbol: str, start_ts: str, end_ts: str, depth: int = 1,
+    ) -> pl.DataFrame:
+        """Get MBP data using exact ISO timestamps."""
+        schema = f"mbp-{depth}"
+        return self._download_ts(symbol, start_ts, end_ts, schema)
+
+    def get_ohlcv_ts(
+        self, symbol: str, start_ts: str, end_ts: str, interval: str = "1m",
+    ) -> pl.DataFrame:
+        """Get OHLCV bars using exact ISO timestamps."""
+        schema = f"ohlcv-{interval}"
+        return self._download_ts(symbol, start_ts, end_ts, schema)
+
     # ── Public API ───────────────────────────────────────────────────────
 
     def get_trades(
