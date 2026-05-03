@@ -9,7 +9,7 @@ Usage:
 from __future__ import annotations
 
 import logging
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import databento as db
@@ -67,22 +67,50 @@ class DataLoader:
         dt: date,
         schema: str,
         stype_in: str = "continuous",
+        start_hour: int | None = None,
+        end_hour: int | None = None,
     ) -> pl.DataFrame:
-        """Download one day of data from Databento and cache as parquet."""
-        cache = self._cache_path(symbol, dt, schema)
+        """Download data from Databento and cache as parquet.
+
+        Args:
+            start_hour: UTC hour to start (e.g., 13 for 9:30 AM ET).
+                        If None, downloads from midnight.
+            end_hour:   UTC hour to end (e.g., 15 for 11:00 AM ET).
+                        If None, downloads until midnight next day.
+        """
+        # Build a cache key that includes the hour range
+        hour_tag = ""
+        if start_hour is not None or end_hour is not None:
+            sh = start_hour or 0
+            eh = end_hour or 24
+            hour_tag = f"_h{sh}-{eh}"
+        cache = self.data_dir / f"{symbol}_{dt.isoformat()}_{schema}{hour_tag}.parquet"
+
         if cache.exists():
             logger.info("Cache hit: %s", cache)
             return pl.read_parquet(cache)
 
         logger.info("Downloading %s %s %s from Databento...", symbol, dt, schema)
         raw_sym = SYMBOLS.get(symbol, symbol)
+
+        # Build time range
+        if start_hour is not None:
+            start_ts = f"{dt.isoformat()}T{start_hour:02d}:00:00+00:00"
+        else:
+            start_ts = dt.isoformat()
+
+        if end_hour is not None:
+            end_ts = f"{dt.isoformat()}T{end_hour:02d}:00:00+00:00"
+        else:
+            end_ts = (dt + timedelta(days=1)).isoformat()
+
         data = self.client.timeseries.get_range(
             dataset=DATASET,
             symbols=[raw_sym],
             schema=schema,
             stype_in=stype_in,
-            start=dt.isoformat(),
-            end=(dt + timedelta(days=1)).isoformat(),
+            start=start_ts,
+            end=end_ts,
         )
 
         # Convert DBN to DataFrame via to_df() then to polars
@@ -96,35 +124,45 @@ class DataLoader:
 
     # ── Public API ───────────────────────────────────────────────────────
 
-    def get_trades(self, symbol: str, dt: date) -> pl.DataFrame:
-        """Get all trades for a symbol on a given date.
+    def get_trades(
+        self, symbol: str, dt: date,
+        start_hour: int | None = None, end_hour: int | None = None,
+    ) -> pl.DataFrame:
+        """Get trades for a symbol on a given date.
 
-        Returns DataFrame with columns:
-            ts_event, price, size, side, action, flags, sequence, ...
+        Args:
+            start_hour: UTC hour to start (default: full day).
+            end_hour:   UTC hour to end.
         """
-        return self._download(symbol, dt, "trades")
+        return self._download(symbol, dt, "trades", start_hour=start_hour, end_hour=end_hour)
 
-    def get_mbp(self, symbol: str, dt: date, depth: int = 1) -> pl.DataFrame:
+    def get_mbp(
+        self, symbol: str, dt: date, depth: int = 1,
+        start_hour: int | None = None, end_hour: int | None = None,
+    ) -> pl.DataFrame:
         """Get MBP (Market by Price) snapshots.
 
         Args:
             depth: 1 for BBO (top of book), 10 for top-10 levels.
-
-        Returns DataFrame with bid/ask levels at each update.
+            start_hour: UTC hour to start (default: full day).
+            end_hour:   UTC hour to end.
         """
         schema = f"mbp-{depth}"
-        return self._download(symbol, dt, schema)
+        return self._download(symbol, dt, schema, start_hour=start_hour, end_hour=end_hour)
 
     def get_ohlcv(
-        self, symbol: str, dt: date, interval: str = "1m"
+        self, symbol: str, dt: date, interval: str = "1m",
+        start_hour: int | None = None, end_hour: int | None = None,
     ) -> pl.DataFrame:
         """Get OHLCV bars.
 
         Args:
             interval: '1s', '1m', '1h', or '1d'
+            start_hour: UTC hour to start (default: full day).
+            end_hour:   UTC hour to end.
         """
         schema = f"ohlcv-{interval}"
-        return self._download(symbol, dt, schema)
+        return self._download(symbol, dt, schema, start_hour=start_hour, end_hour=end_hour)
 
     def get_definition(self, symbol: str, dt: date) -> pl.DataFrame:
         """Get instrument definitions (tick size, multiplier, etc.)."""

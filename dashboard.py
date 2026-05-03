@@ -49,6 +49,12 @@ vwap_dev_slider = pn.widgets.FloatSlider(
 vol_ratio_slider = pn.widgets.FloatSlider(
     name="Min Volume Ratio", start=1.0, end=5.0, step=0.25, value=1.5,
 )
+start_hour_slider = pn.widgets.IntSlider(
+    name="Start Hour (UTC)", start=0, end=23, step=1, value=14,
+)
+end_hour_slider = pn.widgets.IntSlider(
+    name="End Hour (UTC)", start=1, end=24, step=1, value=15,
+)
 snapshot_freq_slider = pn.widgets.IntSlider(
     name="Book Snapshot (ms)", start=50, end=1000, step=50, value=100,
 )
@@ -111,20 +117,22 @@ def on_load(event):
 
     sym = symbol_select.value
     dt = date_picker.value
+    sh = start_hour_slider.value
+    eh = end_hour_slider.value
 
     try:
         # ── 1. Load raw data ──────────────────────────────────────
-        status_pane.object = f"**Status:** Loading {sym} data for {dt}..."
+        status_pane.object = f"**Status:** Loading {sym} data for {dt} ({sh}:00–{eh}:00 UTC)..."
         loader = DataLoader(data_dir="./data")
 
         status_pane.object = "**Status:** Downloading OHLCV bars..."
-        bars_raw = loader.get_ohlcv(sym, dt, interval="1m")
+        bars_raw = loader.get_ohlcv(sym, dt, interval="1m", start_hour=sh, end_hour=eh)
 
         status_pane.object = "**Status:** Loading trades..."
-        trades = loader.get_trades(sym, dt)
+        trades = loader.get_trades(sym, dt, start_hour=sh, end_hour=eh)
 
         status_pane.object = "**Status:** Loading MBP-10 book data..."
-        mbp = loader.get_mbp(sym, dt, depth=10)
+        mbp = loader.get_mbp(sym, dt, depth=10, start_hour=sh, end_hour=eh)
 
         # ── 2. Trade features ─────────────────────────────────────
         status_pane.object = "**Status:** Classifying trades (buy/sell)..."
@@ -226,6 +234,9 @@ sidebar = pn.Column(
     "### Data",
     symbol_select,
     date_picker,
+    start_hour_slider,
+    end_hour_slider,
+    pn.pane.Markdown("*RTH ≈ 13:30–20:00 UTC*", styles={"color": "#888", "font-size": "11px"}),
     pn.layout.Divider(),
     "### Strategy",
     lookback_slider,
