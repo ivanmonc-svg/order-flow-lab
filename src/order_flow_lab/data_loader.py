@@ -22,8 +22,8 @@ DATASET = "GLBX.MDP3"
 
 # Continuous front-month symbols
 SYMBOLS = {
-    "ES": "ES.FUT",
-    "NQ": "NQ.FUT",
+    "ES": "ES.c.0",
+    "NQ": "NQ.c.0",
 }
 
 # Tick sizes (in price units)
